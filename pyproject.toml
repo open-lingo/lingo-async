@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["app*"]
+
+[project]
+name = "lingo-async"
+version = "0.1.0"
+description = "SQS-driven Lambda worker for Open Lingo — quest evaluation, leaderboard updates, activity fan-out."
+requires-python = ">=3.13"
+dependencies = [
+    "pydantic>=2.9",
+    "pydantic-settings>=2.7",
+    "boto3>=1.35",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.9",
+]
+
+[tool.ruff]
+target-version = "py313"
+line-length = 200
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"

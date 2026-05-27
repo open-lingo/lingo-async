@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+.env
+*.egg-info/
+build/
+dist/
+.venv/
+.ruff_cache/
+.pytest_cache/
+lingo-async.zip
+*.zip
+
+# Accidental SQLite ":memory:" string used as a path
+:memory:
+.claude/

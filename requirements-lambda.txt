@@ -1,0 +1,9 @@
+# Runtime-only dependencies for the AWS Lambda zip.
+# Dev tools (pytest, ruff) live in pyproject.toml's [project.optional-dependencies].
+# No FastAPI / Mangum — this is an SQS-triggered worker, not an HTTP service.
+# boto3 is provided by the Lambda runtime, but we pin a known-good version
+# explicitly so behaviour doesn't drift when AWS rolls the runtime image.
+
+pydantic>=2.9
+pydantic-settings>=2.7
+boto3>=1.35

@@ -1,0 +1,128 @@
+"""Discriminated-union message contracts for the lingo-events SQS queue.
+
+Every message has:
+  - ``type``    — string literal, discriminator
+  - ``version`` — int literal, currently always 1
+
+When a contract changes, BUMP the version (add a new union branch) rather
+than silently extending an existing one. In-flight messages from the prior
+producer build will still arrive with the old version, and a silent
+extension is a great way to lose data on the cut-over.
+
+Producers (lingo-core, lingo-ops) MUST mirror these shapes. The minimum
+producer wrapper is in ``../lingo-core/app/events/publisher.py``.
+"""
+
+from datetime import datetime
+from typing import Annotated, Literal
+
+from pydantic import BaseModel, Field, TypeAdapter, ValidationError
+
+
+class _EnvelopeV1(BaseModel):
+    """Base envelope. Every v1 message carries these fields plus its own
+    discriminator and payload. Subclasses pin ``type`` and ``version`` as
+    ``Literal`` so Pydantic's discriminated union can dispatch."""
+
+    version: Literal[1] = 1
+
+
+class XpAwardedMessage(_EnvelopeV1):
+    """User earned XP from any source. Drives leaderboard increments and
+    XP-bucket quest progress (e.g. "earn 100 XP today")."""
+
+    type: Literal["xp_awarded"] = "xp_awarded"
+    user_id: str
+    amount: int = Field(ge=0)
+    source: Literal["lesson", "review", "manual", "quest", "streak"]
+
+
+class LessonCompletedMessage(_EnvelopeV1):
+    """A lesson attempt finished (passed or failed — ``score`` reflects).
+    Drives lesson-count quests + first-perfect-lesson achievements."""
+
+    type: Literal["lesson_completed"] = "lesson_completed"
+    user_id: str
+    lesson_id: str
+    score: float = Field(ge=0.0, le=1.0)
+    perfect: bool
+    attempted_at: datetime
+
+
+class ReviewCompletedMessage(_EnvelopeV1):
+    """An SRS review card was graded. Drives review-count + streak quests.
+
+    ``modality`` distinguishes recognition (see-the-prompt) from production
+    (produce-the-answer); some quests differentiate.
+    """
+
+    type: Literal["review_completed"] = "review_completed"
+    user_id: str
+    card_id: str
+    modality: Literal["recognition", "production"]
+    rating: Literal["again", "hard", "good", "easy"]
+
+
+class FriendAddedMessage(_EnvelopeV1):
+    """A friendship edge was created (reciprocal — the producer fires ONE
+    event with both ids; the consumer evaluates quests for ``user_id`` only.
+    If the friend's own quests also need evaluation, the producer fires a
+    second event with the ids swapped). Drives social quests."""
+
+    type: Literal["friend_added"] = "friend_added"
+    user_id: str
+    friend_id: str
+
+
+class SubscriptionChangedMessage(_EnvelopeV1):
+    """Subscription tier transitioned. Stub for now — future home for
+    premium-badge fan-out and churn-watch alerts."""
+
+    type: Literal["subscription_changed"] = "subscription_changed"
+    user_id: str
+    tier: Literal["free", "supporter", "patron", "lifetime"]
+    event: Literal["new", "upgraded", "downgraded", "churned"]
+
+
+# The union producers serialize from and the consumer parses into.
+# Pydantic's discriminated-union dispatch on ``type`` is exhaustive — adding
+# a new message type means adding a class above, extending the Union below,
+# and adding a handler entry in ``app.handler``.
+EventMessage = Annotated[
+    XpAwardedMessage
+    | LessonCompletedMessage
+    | ReviewCompletedMessage
+    | FriendAddedMessage
+    | SubscriptionChangedMessage,
+    Field(discriminator="type"),
+]
+
+
+# TypeAdapter caches the validator construction — building it per-call is
+# the easy perf footgun with discriminated unions.
+_EVENT_ADAPTER: TypeAdapter[EventMessage] = TypeAdapter(EventMessage)
+
+
+def parse_event(body: str | bytes | dict) -> EventMessage:
+    """Parse an SQS message body into the appropriate concrete message type.
+
+    Accepts a JSON string/bytes (the raw SQS Records[*].body) or an already-
+    decoded dict (handy in tests). Raises ``pydantic.ValidationError`` on
+    mismatch — the dispatch loop catches and reports the message id back to
+    SQS for retry.
+    """
+    if isinstance(body, (str, bytes)):
+        return _EVENT_ADAPTER.validate_json(body)
+    return _EVENT_ADAPTER.validate_python(body)
+
+
+__all__ = [
+    "EventMessage",
+    "FriendAddedMessage",
+    "LessonCompletedMessage",
+    "ReviewCompletedMessage",
+    "SubscriptionChangedMessage",
+    "ValidationError",
+    "XpAwardedMessage",
+    "parse_event",
+]
