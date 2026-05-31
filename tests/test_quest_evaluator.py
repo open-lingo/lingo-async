@@ -1,41 +1,85 @@
-"""Stub-shape tests for the quest evaluator.
+"""Quest evaluator — event → quest match + REST callback."""
 
-When the real implementation lands, replace these with per-quest-type
-assertions. For now we only verify the stub accepts the right shape and
-doesn't raise.
-"""
-
-from __future__ import annotations
-
-import logging
+from unittest.mock import MagicMock
 
 from app.contracts.messages import (
-    FriendAddedMessage,
     LessonCompletedMessage,
+    ReviewCompletedMessage,
     XpAwardedMessage,
 )
-from app.quests.evaluator import evaluate_quests_for
+from app.quests import evaluator as eval_mod
 
 
-def test_stub_accepts_xp_awarded_event() -> None:
-    event = XpAwardedMessage(user_id="u", amount=1, source="manual")
-    evaluate_quests_for(event.user_id, event)  # no raise
+def _quest(quest_id: str, unit: str, current: int = 0, target: int = 50, status: str = "active"):
+    return {
+        "id": quest_id, "type": "daily", "title": "k", "description": "k",
+        "emoji": "", "rewards": {},
+        "progress": {"current": current, "target": target, "unit": unit},
+        "status": status,
+    }
 
 
-def test_stub_accepts_lesson_completed_event() -> None:
+def test_xp_event_matches_xp_unit_quest(monkeypatch):
+    fake = MagicMock()
+    fake.list_quests.return_value = {"items": [_quest("q-xp", "XP"), _quest("q-cards", "cards")]}
+    fake.bump_progress.return_value = {
+        "id": "q-xp", "progress": {"current": 10, "target": 50, "unit": "XP"},
+        "status": "active",
+    }
+    monkeypatch.setattr(eval_mod, "_client", lambda: fake)
+
+    event = XpAwardedMessage(user_id="u-1", amount=10, source="lesson")
+    actions = eval_mod.evaluate_quests_for("u-1", event)
+
+    fake.bump_progress.assert_called_once_with("q-xp", user_id="u-1", delta=10)
+    assert len(actions) == 1
+    assert actions[0]["quest_id"] == "q-xp"
+    assert actions[0]["unit"] == "XP"
+    assert actions[0]["delta"] == 10
+
+
+def test_lesson_event_matches_lessons_unit(monkeypatch):
+    fake = MagicMock()
+    fake.list_quests.return_value = {
+        "items": [_quest("q-lessons", "lessons", current=2, target=5)],
+    }
+    fake.bump_progress.return_value = {
+        "id": "q-lessons", "progress": {"current": 3, "target": 5, "unit": "lessons"},
+        "status": "active",
+    }
+    monkeypatch.setattr(eval_mod, "_client", lambda: fake)
+
     event = LessonCompletedMessage(
-        user_id="u",
-        lesson_id="l",
-        score=0.5,
-        perfect=False,
-        attempted_at=__import__("datetime").datetime(2026, 5, 27, tzinfo=__import__("datetime").UTC),
+        user_id="u-1", lesson_id="L1", score=1.0, perfect=True,
+        attempted_at="2026-05-31T00:00:00Z",
     )
-    evaluate_quests_for(event.user_id, event)
+    actions = eval_mod.evaluate_quests_for("u-1", event)
+
+    fake.bump_progress.assert_called_once_with("q-lessons", user_id="u-1", delta=1)
+    assert actions[0]["progress_after"] == 3
 
 
-def test_stub_logs_event_type(caplog) -> None:
-    event = FriendAddedMessage(user_id="u-1", friend_id="u-2")
-    with caplog.at_level(logging.INFO, logger="lingo_async.quests"):
-        evaluate_quests_for(event.user_id, event)
-    assert any("quest_eval_stub" in r.message for r in caplog.records)
-    assert any("event_type=friend_added" in r.message for r in caplog.records)
+def test_no_match_returns_empty(monkeypatch):
+    fake = MagicMock()
+    fake.list_quests.return_value = {"items": [_quest("q-cards", "cards")]}
+    monkeypatch.setattr(eval_mod, "_client", lambda: fake)
+
+    event = XpAwardedMessage(user_id="u-1", amount=10, source="lesson")
+    actions = eval_mod.evaluate_quests_for("u-1", event)
+
+    fake.bump_progress.assert_not_called()
+    assert actions == []
+
+
+def test_skips_inactive_quests(monkeypatch):
+    fake = MagicMock()
+    fake.list_quests.return_value = {
+        "items": [_quest("q-claimable", "XP", status="claimable")],
+    }
+    monkeypatch.setattr(eval_mod, "_client", lambda: fake)
+
+    event = XpAwardedMessage(user_id="u-1", amount=10, source="lesson")
+    actions = eval_mod.evaluate_quests_for("u-1", event)
+
+    fake.bump_progress.assert_not_called()
+    assert actions == []
