@@ -26,6 +26,14 @@ def main() -> None:
     )
     log = logging.getLogger("lingo_async.run_local")
 
+    event_log_path = os.environ.get("EVENT_LOG_SQLITE_PATH", "")
+    if event_log_path and os.path.exists(event_log_path):
+        try:
+            os.remove(event_log_path)
+            log.info("event_log_truncated path=%s", event_log_path)
+        except OSError as e:
+            log.warning("event_log_truncate_failed path=%s err=%s", event_log_path, e)
+
     broker_url = os.environ.get("EVENTS_BROKER_URL", "redis://localhost:6379/0")
     log.info("starting local consumer broker=%s", broker_url)
 
