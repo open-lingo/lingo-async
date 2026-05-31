@@ -25,6 +25,10 @@ class Settings(BaseSettings):
     # INFO in Lambda; DEBUG locally for verbose handler tracing.
     LOG_LEVEL: str = "INFO"
 
+    # "sqlite" | "dynamodb" | "" (= disabled)
+    EVENT_LOG_BACKEND: str = ""
+    EVENT_LOG_SQLITE_PATH: str = "/tmp/lingo-events.sqlite"
+
     model_config = {"env_file": str(_PROJECT_ROOT / ".env"), "env_file_encoding": "utf-8"}
 
 
