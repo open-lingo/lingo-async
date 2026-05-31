@@ -6,9 +6,12 @@ from the same producer batch, so leaderboard updates happen there —
 NOT here.
 """
 
+from typing import Any
+
 from app.contracts.messages import LessonCompletedMessage
 from app.quests.evaluator import evaluate_quests_for
 
 
-def handle(event: LessonCompletedMessage) -> None:
+def handle(event: LessonCompletedMessage) -> list[dict[str, Any]]:
     evaluate_quests_for(event.user_id, event)
+    return []

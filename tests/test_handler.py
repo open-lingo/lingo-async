@@ -135,3 +135,37 @@ def test_partial_batch_failure_only_marks_bad_messages(sqs_record_factory, xp_ev
 def test_empty_records_returns_empty_failures() -> None:
     result = handler_module.lambda_handler({"Records": []}, None)
     assert result == {"batchItemFailures": []}
+
+
+def test_dispatch_writes_event_row(monkeypatch, sqs_record_factory, xp_event_dict, tmp_path):
+    """The dispatch loop saves an event row before handling and updates it
+    with status + outcomes after."""
+    from app.config import settings
+    from app.db.sqlite.events import SqliteEventsWriteRepository
+    from app import handler as handler_mod
+
+    monkeypatch.setattr(settings, "EVENT_LOG_BACKEND", "sqlite")
+    monkeypatch.setattr(settings, "EVENT_LOG_SQLITE_PATH", str(tmp_path / "ev.sqlite"))
+
+    # Force a known repo so we can inspect it after dispatch.
+    repo = SqliteEventsWriteRepository(str(tmp_path / "ev.sqlite"))
+    monkeypatch.setattr(handler_mod, "_get_events_repo", lambda: repo)
+
+    # Stub the xp_awarded handler module's `handle` to return a known action list.
+    from app.handlers import xp_awarded as xp_mod
+    monkeypatch.setattr(xp_mod, "handle", lambda event: [{"handler": "test", "actions": [{"k": "v"}]}])
+
+    record = sqs_record_factory(xp_event_dict, message_id="msg-x")
+    result = handler_mod.lambda_handler({"Records": [record]}, object())
+    assert result == {"batchItemFailures": []}
+
+    import sqlite3
+    con = sqlite3.connect(repo.path)
+    row = con.execute(
+        "SELECT id, user_id, event_type, status, outcomes_json FROM events"
+    ).fetchone()
+    assert row[0] == "msg-x"
+    assert row[1] == "u-test-1"
+    assert row[2] == "xp_awarded"
+    assert row[3] == "ok"
+    assert '"test"' in row[4]

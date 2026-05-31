@@ -6,9 +6,12 @@ of the edge (or two for the reciprocal case); we evaluate against the
 ``user_id`` on the message only.
 """
 
+from typing import Any
+
 from app.contracts.messages import FriendAddedMessage
 from app.quests.evaluator import evaluate_quests_for
 
 
-def handle(event: FriendAddedMessage) -> None:
+def handle(event: FriendAddedMessage) -> list[dict[str, Any]]:
     evaluate_quests_for(event.user_id, event)
+    return []

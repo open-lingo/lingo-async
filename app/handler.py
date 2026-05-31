@@ -12,9 +12,10 @@ Wired to the ``lingo-events`` SQS queue via event source mapping
 
 We:
   1. Parse each ``body`` against the ``EventMessage`` discriminated union.
-  2. Look up the handler by ``type``.
-  3. Run it.
-  4. On any exception, append the ``messageId`` to ``batchItemFailures``
+  2. Save an event row to the events log (if a repo is configured).
+  3. Look up the handler by ``type`` and run it.
+  4. Update the event row with the final status + outcomes.
+  5. On any exception, append the ``messageId`` to ``batchItemFailures``
      so SQS retries that specific message — successful peers in the
      same batch still auto-delete.
 
@@ -28,7 +29,10 @@ with no concurrency to exploit — async would add overhead with no
 throughput benefit.
 """
 
+import json
 import logging
+from datetime import UTC, datetime
+from typing import Any
 
 from pydantic import ValidationError
 
@@ -42,6 +46,7 @@ from app.contracts.messages import (
     XpAwardedMessage,
     parse_event,
 )
+from app.db.provider import get_events_repo
 from app.handlers import (
     friend_added,
     lesson_completed,
@@ -69,6 +74,14 @@ _DISPATCH: dict[str, tuple[type, object]] = {
     "subscription_changed": (SubscriptionChangedMessage, subscription_changed),
 }
 
+# 30-day TTL — Dynamo prunes; sqlite ignores.
+_TTL_SECONDS = 30 * 24 * 3600
+
+
+def _get_events_repo():
+    """Indirection so tests can monkeypatch."""
+    return get_events_repo()
+
 
 def lambda_handler(event: dict, context: object) -> dict:
     """SQS-triggered Lambda entry point.
@@ -76,15 +89,27 @@ def lambda_handler(event: dict, context: object) -> dict:
     Returns ``{"batchItemFailures": [{"itemIdentifier": <id>}, ...]}``.
     Only the listed message ids are retried; the rest auto-delete from
     the queue.
+
+    Each record is written to the event log before dispatch (status
+    ``received``) and updated after (status ``ok`` or ``failed``) with
+    the handler's outcomes merged in.
     """
     records = event.get("Records") or []
     failures: list[dict[str, str]] = []
+    repo = _get_events_repo()
 
     for record in records:
         message_id = record.get("messageId", "<unknown>")
+        body_str = record.get("body") or "{}"
+        received_at = datetime.now(UTC).isoformat()
+        ttl_epoch = int(datetime.now(UTC).timestamp() + _TTL_SECONDS)
+        parsed: EventMessage | None = None
+        outcomes: list[dict[str, Any]] = []
+        error_msg: str | None = None
+        status = "ok"
+
         try:
-            parsed = parse_event(record.get("body") or "{}")
-            _dispatch(parsed)
+            parsed = parse_event(body_str)
         except ValidationError as exc:
             # Bad envelope. Retrying won't help — the producer is wrong.
             # Still report it so the message moves to DLQ after
@@ -95,6 +120,35 @@ def lambda_handler(event: dict, context: object) -> dict:
                 exc.errors(),
             )
             failures.append({"itemIdentifier": message_id})
+            if repo is not None:
+                repo.save(
+                    id=message_id,
+                    user_id="<unparsed>",
+                    event_type="<unparsed>",
+                    payload_json=body_str,
+                    received_at=received_at,
+                    ttl_epoch=ttl_epoch,
+                )
+                repo.update_status(
+                    id=message_id,
+                    status="failed",
+                    error_msg=str(exc.errors()),
+                    outcomes_json="[]",
+                )
+            continue
+
+        if repo is not None:
+            repo.save(
+                id=message_id,
+                user_id=parsed.user_id,
+                event_type=parsed.type,
+                payload_json=body_str,
+                received_at=received_at,
+                ttl_epoch=ttl_epoch,
+            )
+
+        try:
+            outcomes = _dispatch(parsed) or []
         except Exception as exc:
             # Handler error — could be transient (Dynamo throttle) or
             # permanent (bug). Either way, retry; the DLQ is the safety
@@ -103,6 +157,16 @@ def lambda_handler(event: dict, context: object) -> dict:
                 "handler_error message_id=%s err=%s", message_id, exc
             )
             failures.append({"itemIdentifier": message_id})
+            status = "failed"
+            error_msg = repr(exc)
+
+        if repo is not None:
+            repo.update_status(
+                id=message_id,
+                status=status,
+                error_msg=error_msg,
+                outcomes_json=json.dumps(outcomes),
+            )
 
     if failures:
         logger.info("batch_partial_failure count=%d total=%d", len(failures), len(records))
@@ -110,7 +174,7 @@ def lambda_handler(event: dict, context: object) -> dict:
     return {"batchItemFailures": failures}
 
 
-def _dispatch(event: EventMessage) -> None:
+def _dispatch(event: EventMessage) -> list[dict[str, Any]]:
     """Route a parsed event to its handler. Unknown types are a producer
     bug (the union should have rejected the parse) — raise to mark the
     message failed."""
@@ -119,4 +183,4 @@ def _dispatch(event: EventMessage) -> None:
         raise ValueError(f"no handler registered for type={event.type!r}")
     _, module = entry
     logger.debug("dispatch type=%s", event.type)
-    module.handle(event)
+    return module.handle(event) or []
