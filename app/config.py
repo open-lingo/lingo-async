@@ -29,6 +29,9 @@ class Settings(BaseSettings):
     EVENT_LOG_BACKEND: str = ""
     EVENT_LOG_SQLITE_PATH: str = "/tmp/lingo-events.sqlite"
 
+    LINGO_CORE_URL: str = "http://localhost:8000"
+    INTERNAL_SERVICE_TOKEN: str = ""
+
     model_config = {"env_file": str(_PROJECT_ROOT / ".env"), "env_file_encoding": "utf-8"}
 
 
