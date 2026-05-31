@@ -35,6 +35,12 @@ class XpAwardedMessage(_EnvelopeV1):
     user_id: str
     amount: int = Field(ge=0)
     source: Literal["lesson", "review", "manual", "quest", "streak"]
+    # Self-contained payload: the producer reads these from the user's
+    # in-flight session row and includes them, so the consumer can fan
+    # out to the leaderboard without a second DB roundtrip. Optional +
+    # safely defaulted so in-flight messages from legacy producers parse.
+    learning_language_id: str | None = None
+    leaderboard_opt_in: bool = True
 
 
 class LessonCompletedMessage(_EnvelopeV1):

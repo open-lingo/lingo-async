@@ -135,3 +135,36 @@ def test_amount_must_be_nonnegative() -> None:
                 "source": "manual",
             }
         )
+
+
+def test_xp_awarded_carries_language_and_optin():
+    from app.contracts.messages import parse_event
+
+    body = {
+        "type": "xp_awarded",
+        "version": 1,
+        "user_id": "u-1",
+        "amount": 25,
+        "source": "lesson",
+        "learning_language_id": "ja",
+        "leaderboard_opt_in": True,
+    }
+    msg = parse_event(body)
+    assert msg.learning_language_id == "ja"
+    assert msg.leaderboard_opt_in is True
+
+
+def test_xp_awarded_defaults_when_legacy_producer():
+    from app.contracts.messages import parse_event
+
+    # Legacy producer doesn't know about the new fields yet.
+    body = {
+        "type": "xp_awarded",
+        "version": 1,
+        "user_id": "u-1",
+        "amount": 25,
+        "source": "lesson",
+    }
+    msg = parse_event(body)
+    assert msg.learning_language_id is None
+    assert msg.leaderboard_opt_in is True  # safe default
