@@ -1,13 +1,7 @@
 """Handler for ``xp_awarded`` — leaderboard update + quest evaluation.
 
-Returns a list of {handler, actions} dicts capturing what was done.
-The dispatch loop merges these into the event-log row's ``outcomes``
-column so the inspector can show "event X advanced quest Y, wrote
-leaderboard bucket Z".
-
-NOTE: Today's wrapper returns ``[]`` because the called helpers still
-return ``None``. Tasks 9 + 10 rewrite the helpers to return action lists;
-this wrapper will then collect and return them.
+Returns a list of {handler, actions} dicts capturing what was done. The
+dispatch loop merges these into the event-log row's ``outcomes`` column.
 """
 
 from typing import Any
@@ -18,6 +12,9 @@ from app.quests.evaluator import evaluate_quests_for
 
 
 def handle(event: XpAwardedMessage) -> list[dict[str, Any]]:
-    update_leaderboard(event)
-    evaluate_quests_for(event.user_id, event)
-    return []
+    outcomes: list[dict[str, Any]] = []
+    lb_actions = update_leaderboard(event)
+    outcomes.append({"handler": "leaderboard", "actions": lb_actions})
+    q_actions = evaluate_quests_for(event.user_id, event)
+    outcomes.append({"handler": "quest_eval", "actions": q_actions})
+    return outcomes
