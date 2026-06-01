@@ -2,13 +2,17 @@ name: deploy
 
 # Auto-deploys lingo-async Lambda code on every push to main.
 # Terraform owns infra (queues, IAM, event source mapping, memory, timeout);
-# this workflow owns code. Requires org secrets: AWS_ACCESS_KEY_ID,
-# AWS_SECRET_ACCESS_KEY, AWS_REGION.
+# this workflow owns code.
+# Auth: GitHub OIDC -> ci-lingo-async IAM role (no stored AWS keys).
 
 on:
   push:
     branches: [main]
   workflow_dispatch:
+
+permissions:
+  id-token: write # required to mint the OIDC token
+  contents: read
 
 jobs:
   deploy:
@@ -20,10 +24,9 @@ jobs:
           python-version: "3.13"
       - name: build zip
         run: ./scripts/build-zip.sh
-      - uses: aws-actions/configure-aws-credentials@v4
+      - uses: aws-actions/configure-aws-credentials@v5
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          role-to-assume: arn:aws:iam::349654078389:role/ci-lingo-async
           aws-region: us-west-1
       - name: update lambda code
         run: |
