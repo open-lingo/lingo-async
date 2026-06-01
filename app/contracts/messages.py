@@ -87,6 +87,21 @@ class FriendAddedMessage(_EnvelopeV1):
     friend_id: str
 
 
+class AdWatchedMessage(_EnvelopeV1):
+    """User watched a rewarded ad and was credited lingots in lingo-core
+    before publish. Currently no consumer-side side effect — captured for
+    the event-store inspector so we can graph watch volume per placement
+    while the FE is iterating. A handler will land when we wire ad-time
+    quests or anti-abuse caps."""
+
+    type: Literal["ad_watched"] = "ad_watched"
+    user_id: str
+    placement: str
+    idempotency_key: str
+    lingots_awarded: int = Field(ge=0)
+    occurred_at: datetime
+
+
 class SubscriptionChangedMessage(_EnvelopeV1):
     """Subscription tier transitioned. Stub for now — future home for
     premium-badge fan-out and churn-watch alerts."""
@@ -106,6 +121,7 @@ EventMessage = Annotated[
     | LessonCompletedMessage
     | ReviewCompletedMessage
     | FriendAddedMessage
+    | AdWatchedMessage
     | SubscriptionChangedMessage,
     Field(discriminator="type"),
 ]
@@ -130,6 +146,7 @@ def parse_event(body: str | bytes | dict) -> EventMessage:
 
 
 __all__ = [
+    "AdWatchedMessage",
     "EventMessage",
     "FriendAddedMessage",
     "LessonCompletedMessage",
