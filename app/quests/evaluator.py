@@ -31,13 +31,17 @@ def _client() -> LingoCoreClient:
 
 
 def _event_unit_and_delta(event: EventMessage) -> tuple[str, int] | None:
-    """Return (progress_unit, delta) for events that advance quests, else None."""
+    """Return (progress_unit, delta) for events that advance quests, else None.
+
+    Batched events (currently just ``review_completed``) carry their delta
+    in ``count``; per-item events default to 1.
+    """
     if isinstance(event, XpAwardedMessage):
         return ("XP", event.amount)
     if isinstance(event, LessonCompletedMessage):
         return ("lessons", 1)
     if isinstance(event, ReviewCompletedMessage):
-        return ("cards", 1)
+        return ("cards", event.count)
     if isinstance(event, FriendAddedMessage):
         return ("friends", 1)
     return None

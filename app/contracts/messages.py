@@ -56,10 +56,13 @@ class LessonCompletedMessage(_EnvelopeV1):
 
 
 class ReviewCompletedMessage(_EnvelopeV1):
-    """An SRS review card was graded. Drives review-count + streak quests.
+    """One or more SRS review cards were graded. Drives review-count +
+    streak quests.
 
-    ``modality`` distinguishes recognition (see-the-prompt) from production
-    (produce-the-answer); some quests differentiate.
+    Producers should batch a whole sync into ONE message with ``count``
+    set to the number of reviews. ``card_id`` / ``modality`` / ``rating``
+    describe one representative card (the last in the batch) for
+    observability; the consumer uses ``count`` as the delta.
     """
 
     type: Literal["review_completed"] = "review_completed"
@@ -67,6 +70,10 @@ class ReviewCompletedMessage(_EnvelopeV1):
     card_id: str
     modality: Literal["recognition", "production"]
     rating: Literal["again", "hard", "good", "easy"]
+    # NEW (additive): how many reviews this event represents. Quest
+    # evaluator uses this as the delta for ``unit="cards"`` quests.
+    # Legacy producers don't set it; default = 1.
+    count: int = Field(default=1, ge=1)
 
 
 class FriendAddedMessage(_EnvelopeV1):
