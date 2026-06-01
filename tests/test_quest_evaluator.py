@@ -4,7 +4,6 @@ from unittest.mock import MagicMock
 
 from app.contracts.messages import (
     LessonCompletedMessage,
-    ReviewCompletedMessage,
     XpAwardedMessage,
 )
 from app.quests import evaluator as eval_mod

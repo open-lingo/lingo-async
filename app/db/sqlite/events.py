@@ -9,8 +9,8 @@ WAL; default rollback-journal mode would lock readers out during writes.
 
 import logging
 import sqlite3
+from collections.abc import Iterator
 from contextlib import contextmanager
-from typing import Iterator
 
 logger = logging.getLogger("lingo_async.db.events")
 

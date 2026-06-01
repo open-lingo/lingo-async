@@ -1,4 +1,3 @@
-import pytest
 
 from app.config import settings
 from app.db.provider import get_events_repo

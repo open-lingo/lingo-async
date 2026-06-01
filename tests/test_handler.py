@@ -140,9 +140,9 @@ def test_empty_records_returns_empty_failures() -> None:
 def test_dispatch_writes_event_row(monkeypatch, sqs_record_factory, xp_event_dict, tmp_path):
     """The dispatch loop saves an event row before handling and updates it
     with status + outcomes after."""
+    from app import handler as handler_mod
     from app.config import settings
     from app.db.sqlite.events import SqliteEventsWriteRepository
-    from app import handler as handler_mod
 
     monkeypatch.setattr(settings, "EVENT_LOG_BACKEND", "sqlite")
     monkeypatch.setattr(settings, "EVENT_LOG_SQLITE_PATH", str(tmp_path / "ev.sqlite"))
