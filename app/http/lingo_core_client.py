@@ -49,3 +49,36 @@ class LingoCoreClient:
             return resp.json()
         finally:
             client.close()
+
+    def add_xp(
+        self,
+        *,
+        user_id: str,
+        amount: int,
+        learning_language_id: str | None,
+        leaderboard_opt_in: bool,
+    ) -> dict[str, Any]:
+        """Credit XP + write to the leaderboard via lingo-core. Used by
+        the xp_awarded handler for events that came from a *non-lingo-core*
+        producer (today: synthetic admin events from lingo-ops). Real
+        lesson XP is credited inline by lingo-core's progress router
+        before the event publishes, so we'd be double-counting if we
+        called this for those — see the source-based gate in the handler.
+        """
+        client = httpx.Client()
+        try:
+            resp = client.post(
+                f"{self._base}/api/core/v1/users/_internal/xp/add",
+                json={
+                    "user_id": user_id,
+                    "amount": amount,
+                    "learning_language_id": learning_language_id,
+                    "leaderboard_opt_in": leaderboard_opt_in,
+                },
+                headers=self._headers,
+                timeout=_TIMEOUT,
+            )
+            resp.raise_for_status()
+            return resp.json()
+        finally:
+            client.close()
