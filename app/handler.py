@@ -38,6 +38,7 @@ from pydantic import ValidationError
 
 from app.config import settings
 from app.contracts.messages import (
+    AdWatchedMessage,
     EventMessage,
     FriendAddedMessage,
     LessonCompletedMessage,
@@ -48,6 +49,7 @@ from app.contracts.messages import (
 )
 from app.db.provider import get_events_repo
 from app.handlers import (
+    ad_watched,
     friend_added,
     lesson_completed,
     review_completed,
@@ -72,6 +74,7 @@ _DISPATCH: dict[str, tuple[type, object]] = {
     "review_completed": (ReviewCompletedMessage, review_completed),
     "friend_added": (FriendAddedMessage, friend_added),
     "subscription_changed": (SubscriptionChangedMessage, subscription_changed),
+    "ad_watched": (AdWatchedMessage, ad_watched),
 }
 
 # 30-day TTL — Dynamo prunes; sqlite ignores.
