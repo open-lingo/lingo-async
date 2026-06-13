@@ -7,3 +7,9 @@
 pydantic>=2.9
 pydantic-settings>=2.7
 boto3>=1.35
+# httpx backs LingoCoreClient (app/http/lingo_core_client.py) for the
+# quest-progress / XP callbacks into lingo-core. It's in pyproject.toml's
+# runtime deps but MUST also be listed here — build-zip.sh installs ONLY
+# from this file, so omitting it crashes the Lambda with
+# "No module named 'httpx'" on cold-start import (prod outage 2026-06-13).
+httpx>=0.27
