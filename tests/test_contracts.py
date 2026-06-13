@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 from datetime import UTC, datetime
 
@@ -168,3 +169,88 @@ def test_xp_awarded_defaults_when_legacy_producer():
     msg = parse_event(body)
     assert msg.learning_language_id is None
     assert msg.leaderboard_opt_in is True  # safe default
+
+
+def _kombu_envelope_json(payload: dict) -> str:
+    """The kombu envelope (JSON) with the event base64-encoded into ``body`` —
+    the single-layer form."""
+    inner = base64.b64encode(json.dumps(payload).encode("utf-8")).decode("ascii")
+    return json.dumps(
+        {
+            "body": inner,
+            "content-encoding": "utf-8",
+            "content-type": "application/json",
+            "headers": {},
+            "properties": {
+                "delivery_mode": 2,
+                "delivery_info": {"exchange": "lingo-events", "routing_key": "events"},
+                "priority": 0,
+                "body_encoding": "base64",
+                "delivery_tag": "abc-123",
+            },
+        }
+    )
+
+
+def _kombu_sqs_body(payload: dict) -> str:
+    """The EXACT bytes kombu's SQS transport lands as ``Records[*].body``: the
+    whole envelope base64-encoded (verified against a real prod DLQ message,
+    2026-06-13). Two base64 layers: outer = envelope, inner = event."""
+    return base64.b64encode(_kombu_envelope_json(payload).encode("utf-8")).decode("ascii")
+
+
+def test_parse_event_unwraps_kombu_sqs_envelope() -> None:
+    # The real prod wire format: kombu base64-encodes the whole envelope as the
+    # SQS body, and the event is base64'd inside the envelope (two layers). The
+    # prod Lambda was choking on the outer layer (outage 2026-06-13).
+    event = {
+        "type": "lesson_completed",
+        "version": 1,
+        "user_id": "u-1",
+        "lesson_id": "ko-m1-intro",
+        "score": 1.0,
+        "perfect": True,
+        "attempted_at": "2026-06-13T07:34:45.679Z",
+    }
+    parsed = parse_event(_kombu_sqs_body(event))
+    assert isinstance(parsed, LessonCompletedMessage)
+    assert parsed.user_id == "u-1"
+    assert parsed.lesson_id == "ko-m1-intro"
+    assert parsed.perfect is True
+
+
+def test_parse_event_unwraps_single_layer_kombu_envelope() -> None:
+    # Defensive: also accept the envelope as plain JSON (no outer base64), in
+    # case a transport variant delivers it that way.
+    parsed = parse_event(
+        _kombu_envelope_json(
+            {
+                "type": "review_completed",
+                "version": 1,
+                "user_id": "u-9",
+                "card_id": "ja:kdrama-1",
+                "modality": "production",
+                "rating": "good",
+                "count": 6,
+            }
+        )
+    )
+    assert isinstance(parsed, ReviewCompletedMessage)
+    assert parsed.user_id == "u-9"
+
+
+def test_parse_event_still_accepts_raw_json_string() -> None:
+    # Regression: non-enveloped producers (e.g. a future direct-boto3 sender
+    # or a test) must keep working after the unwrap is added.
+    body = json.dumps(
+        {
+            "type": "xp_awarded",
+            "version": 1,
+            "user_id": "u-2",
+            "amount": 10,
+            "source": "manual",
+        }
+    )
+    parsed = parse_event(body)
+    assert isinstance(parsed, XpAwardedMessage)
+    assert parsed.amount == 10

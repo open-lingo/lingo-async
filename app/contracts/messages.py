@@ -13,6 +13,8 @@ Producers (lingo-core, lingo-ops) MUST mirror these shapes. The minimum
 producer wrapper is in ``../lingo-core/app/events/publisher.py``.
 """
 
+import base64
+import json
 from datetime import datetime
 from typing import Annotated, Literal
 
@@ -132,16 +134,85 @@ EventMessage = Annotated[
 _EVENT_ADAPTER: TypeAdapter[EventMessage] = TypeAdapter(EventMessage)
 
 
+def _try_kombu_envelope(text: str) -> str | None:
+    """If ``text`` is a kombu envelope JSON, return its decoded inner payload;
+    otherwise None. The envelope shape is::
+
+        {"body": "<base64 JSON>", "content-encoding": "utf-8",
+         "content-type": "application/json",
+         "properties": {"body_encoding": "base64", ...}}
+    """
+    try:
+        obj = json.loads(text)
+    except (ValueError, TypeError):
+        return None
+    if (
+        isinstance(obj, dict)
+        and "body" in obj
+        and "content-type" in obj
+        and isinstance(obj.get("properties"), dict)
+    ):
+        inner = obj["body"]
+        if obj["properties"].get("body_encoding") == "base64":
+            encoding = obj.get("content-encoding") or "utf-8"
+            return base64.b64decode(inner).decode(encoding)
+        # Non-base64 kombu bodies carry the payload as a plain string.
+        return inner if isinstance(inner, str) else json.dumps(inner)
+    return None
+
+
+def _unwrap_kombu_envelope(body: str | bytes) -> str | bytes:
+    """Unwrap kombu's SQS message envelope, if present.
+
+    lingo-core publishes via kombu (see ``lingo-core/app/events/publisher.py``).
+    kombu's SQS transport does NOT put the raw event on the queue. It wraps the
+    event in an envelope, base64-encodes the real payload into the envelope's
+    ``body``, and then base64-encodes the WHOLE envelope as the SQS message body.
+    So the prod wire format is two base64 layers deep::
+
+        SQS body  = base64( envelope_json )
+        envelope  = {"body": base64(event_json), "properties": {"body_encoding": "base64"}, ...}
+
+    In local dev the kombu *consumer* (``app/local_consumer.py``) decodes all of
+    this for us, so ``lambda_handler`` sees the bare event. But in prod the
+    Lambda is driven by the raw SQS event source mapping — kombu is never in the
+    consume path — so we must unwrap here. Without this, every real event fails
+    (``Invalid JSON`` on the outer base64, or ``union_tag_not_found`` on the
+    envelope) and lands in the DLQ (prod outage 2026-06-13).
+
+    Returns the inner event payload when the input is a (possibly base64-wrapped)
+    kombu envelope, otherwise the input unchanged (so raw/non-enveloped producers
+    and tests keep working).
+    """
+    text = body.decode("utf-8") if isinstance(body, bytes) else body
+
+    # The envelope may arrive as plain JSON (single layer) ...
+    inner = _try_kombu_envelope(text)
+    if inner is not None:
+        return inner
+
+    # ... or base64-encoded as the whole SQS message body (the prod format).
+    try:
+        decoded = base64.b64decode(text, validate=True).decode("utf-8")
+    except (ValueError, UnicodeDecodeError):
+        return body  # not base64 → a raw event JSON string; let the caller validate
+    inner = _try_kombu_envelope(decoded)
+    if inner is not None:
+        return inner
+    return body
+
+
 def parse_event(body: str | bytes | dict) -> EventMessage:
     """Parse an SQS message body into the appropriate concrete message type.
 
     Accepts a JSON string/bytes (the raw SQS Records[*].body) or an already-
-    decoded dict (handy in tests). Raises ``pydantic.ValidationError`` on
+    decoded dict (handy in tests). Transparently unwraps kombu's SQS envelope
+    (the prod producer's wire format). Raises ``pydantic.ValidationError`` on
     mismatch — the dispatch loop catches and reports the message id back to
     SQS for retry.
     """
     if isinstance(body, (str, bytes)):
-        return _EVENT_ADAPTER.validate_json(body)
+        return _EVENT_ADAPTER.validate_json(_unwrap_kombu_envelope(body))
     return _EVENT_ADAPTER.validate_python(body)
 
 
