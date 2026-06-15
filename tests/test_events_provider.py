@@ -16,8 +16,17 @@ def test_sqlite_returns_repo(monkeypatch, tmp_path):
     assert isinstance(repo, SqliteEventsWriteRepository)
 
 
-def test_dynamodb_returns_stub(monkeypatch):
+def test_dynamodb_returns_real_repo(monkeypatch):
+    # Was a NotImplementedError stub; now a real write-side impl. Resolution
+    # builds a boto3 Table handle but makes no network call until used.
     from app.db.dynamo.events import DynamoEventsWriteRepository
+
     monkeypatch.setattr(settings, "EVENT_LOG_BACKEND", "dynamodb")
     repo = get_events_repo()
     assert isinstance(repo, DynamoEventsWriteRepository)
+    # No method should be a NotImplementedError stub anymore.
+    import inspect
+
+    for name in ("save", "update_status"):
+        src = inspect.getsource(getattr(repo, name))
+        assert "raise NotImplementedError" not in src, f"{name} is still a stub"

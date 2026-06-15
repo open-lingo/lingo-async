@@ -32,6 +32,24 @@ class Settings(BaseSettings):
     LINGO_CORE_URL: str = "http://localhost:8000"
     INTERNAL_SERVICE_TOKEN: str = ""
 
+    # ── async→core callback resilience (see app/http/lingo_core_client.py) ──
+    # Bounded in-process retries on transient core 5xx / network errors. We
+    # keep this small: the SQS event source mapping already gives us coarse
+    # retries (maxReceiveCount → DLQ), so the in-process layer only smooths
+    # over a brief core blip. Too many retries × the Lambda batch size = a
+    # retry storm against a struggling core, which is exactly what H3 guards
+    # against — bound it, back off, then give up and let SQS requeue.
+    CORE_CLIENT_MAX_RETRIES: int = 2  # total attempts = 1 + this
+    CORE_CLIENT_BACKOFF_BASE_S: float = 0.2  # exponential: base * 2**attempt
+    CORE_CLIENT_BACKOFF_MAX_S: float = 2.0
+
+    # Circuit breaker: once core has tripped us this many times in a row,
+    # stop trying for COOLDOWN seconds. A consecutive run of core 5xx means
+    # core is down, not flaky — hammering it (even with backoff) just adds
+    # load. Open circuit ⇒ fail fast, let the message return to the queue.
+    CORE_CLIENT_BREAKER_THRESHOLD: int = 5
+    CORE_CLIENT_BREAKER_COOLDOWN_S: float = 30.0
+
     model_config = {"env_file": str(_PROJECT_ROOT / ".env"), "env_file_encoding": "utf-8"}
 
 

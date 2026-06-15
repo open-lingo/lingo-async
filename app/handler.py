@@ -34,6 +34,7 @@ import logging
 from datetime import UTC, datetime
 from typing import Any
 
+import httpx
 from pydantic import ValidationError
 
 from app.config import settings
@@ -56,11 +57,61 @@ from app.handlers import (
     subscription_changed,
     xp_awarded,
 )
+from app.http.lingo_core_client import LingoCoreClient
 
 # Configure root logger once at module load (cold start). Lambda's
 # default handler writes to CloudWatch Logs.
 logging.basicConfig(level=settings.LOG_LEVEL)
 logger = logging.getLogger("lingo_async.handler")
+
+
+def _verify_internal_token_on_boot() -> None:
+    """Cold-start probe: confirm our INTERNAL_SERVICE_TOKEN matches core's.
+
+    A token mismatch silently broke quests earlier in this project — a
+    drifted token surfaced only as 401s buried in handler retries, with
+    nothing at boot to point at the cause. This makes the failure loud and
+    unambiguous on the first warm-up of every container.
+
+    Failure policy:
+      - 401/403  → token mismatch. Log a LOUD error. This is the case we
+        exist to catch.
+      - other HTTP / network error → core may just be cold or briefly
+        unreachable; log at WARNING and move on (don't block the worker).
+      - no token configured → ERROR (callbacks will fail).
+
+    Never raises: a boot probe must not crash the Lambda. We only log.
+    """
+    if not settings.INTERNAL_SERVICE_TOKEN:
+        logger.error(
+            "INTERNAL_SERVICE_TOKEN is empty — all async→core callbacks "
+            "(quests, xp) will fail with 401. Set it in this function's env."
+        )
+        return
+    try:
+        LingoCoreClient().verify_internal_token()
+        logger.info("internal_token_self_check ok core=%s", settings.LINGO_CORE_URL)
+    except httpx.HTTPStatusError as exc:
+        code = exc.response.status_code
+        if code in (401, 403):
+            logger.error(
+                "INTERNAL_SERVICE_TOKEN MISMATCH — lingo-core rejected our "
+                "token with HTTP %d. async→core callbacks (quests, xp) WILL "
+                "FAIL until the token is realigned between lingo-async and "
+                "lingo-core. core=%s",
+                code,
+                settings.LINGO_CORE_URL,
+            )
+        else:
+            logger.warning("internal_token_self_check unexpected_status=%d", code)
+    except httpx.HTTPError as exc:
+        # Network/timeout — core cold or unreachable at our cold start.
+        # Not necessarily a token problem; don't cry wolf.
+        logger.warning("internal_token_self_check unreachable err=%s", exc)
+
+
+# Run once per warm container at import time (cold start).
+_verify_internal_token_on_boot()
 
 
 # Dispatch table — keyed on the message ``type`` literal. We store the
