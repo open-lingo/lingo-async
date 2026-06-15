@@ -169,3 +169,34 @@ def test_dispatch_writes_event_row(monkeypatch, sqs_record_factory, xp_event_dic
     assert row[2] == "xp_awarded"
     assert row[3] == "ok"
     assert '"test"' in row[4]
+
+
+def test_event_log_write_failure_is_non_fatal(
+    monkeypatch, sqs_record_factory, xp_event_dict
+):
+    """A failing event-log repo (Dynamo throttle/outage) must NOT fail the
+    batch — the audit log is best-effort and may never disrupt the critical
+    dispatch path (quest/XP callbacks)."""
+    from app import handler as handler_mod
+    from app.handlers import xp_awarded as xp_mod
+
+    class ExplodingRepo:
+        def save(self, **_):
+            raise RuntimeError("dynamo down")
+
+        def update_status(self, **_):
+            raise RuntimeError("dynamo down")
+
+    monkeypatch.setattr(handler_mod, "_get_events_repo", lambda: ExplodingRepo())
+
+    dispatched = []
+    monkeypatch.setattr(
+        xp_mod, "handle", lambda event: dispatched.append(event) or [{"ok": True}]
+    )
+
+    record = sqs_record_factory(xp_event_dict, message_id="msg-resilient")
+    result = handler_mod.lambda_handler({"Records": [record]}, object())
+
+    # Dispatch still happened and the message is NOT marked for retry.
+    assert dispatched, "dispatch must run even when the event-log write fails"
+    assert result == {"batchItemFailures": []}

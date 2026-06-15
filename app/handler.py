@@ -137,6 +137,37 @@ def _get_events_repo():
     return get_events_repo()
 
 
+def _safe_save(repo, **kwargs) -> None:
+    """Best-effort event-log write. The log is an append-only audit trail —
+    a write failure (Dynamo throttle/outage, IAM gap) must NEVER fail the
+    batch and disrupt the critical dispatch path (quest/XP callbacks). Swallow
+    and log; the message still processes."""
+    if repo is None:
+        return
+    try:
+        repo.save(**kwargs)
+    except Exception:  # noqa: BLE001
+        logger.exception("events_log_save_failed message_id=%s", kwargs.get("id"))
+
+
+def _safe_update_status(repo, *, id, status, error_msg, outcomes) -> None:
+    """Best-effort event-log status update. See _safe_save — never fatal.
+    Serializes ``outcomes`` inside the guard so neither the JSON encoding nor
+    the Dynamo write can escape when the log is enabled, and so the encode is
+    skipped entirely when there's no repo."""
+    if repo is None:
+        return
+    try:
+        repo.update_status(
+            id=id,
+            status=status,
+            error_msg=error_msg,
+            outcomes_json=json.dumps(outcomes),
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception("events_log_update_status_failed message_id=%s", id)
+
+
 def lambda_handler(event: dict, context: object) -> dict:
     """SQS-triggered Lambda entry point.
 
@@ -174,32 +205,33 @@ def lambda_handler(event: dict, context: object) -> dict:
                 exc.errors(),
             )
             failures.append({"itemIdentifier": message_id})
-            if repo is not None:
-                repo.save(
-                    id=message_id,
-                    user_id="<unparsed>",
-                    event_type="<unparsed>",
-                    payload_json=body_str,
-                    received_at=received_at,
-                    ttl_epoch=ttl_epoch,
-                )
-                repo.update_status(
-                    id=message_id,
-                    status="failed",
-                    error_msg=str(exc.errors()),
-                    outcomes_json="[]",
-                )
-            continue
-
-        if repo is not None:
-            repo.save(
+            _safe_save(
+                repo,
                 id=message_id,
-                user_id=parsed.user_id,
-                event_type=parsed.type,
+                user_id="<unparsed>",
+                event_type="<unparsed>",
                 payload_json=body_str,
                 received_at=received_at,
                 ttl_epoch=ttl_epoch,
             )
+            _safe_update_status(
+                repo,
+                id=message_id,
+                status="failed",
+                error_msg=str(exc.errors()),
+                outcomes=[],
+            )
+            continue
+
+        _safe_save(
+            repo,
+            id=message_id,
+            user_id=parsed.user_id,
+            event_type=parsed.type,
+            payload_json=body_str,
+            received_at=received_at,
+            ttl_epoch=ttl_epoch,
+        )
 
         try:
             outcomes = _dispatch(parsed) or []
@@ -214,13 +246,13 @@ def lambda_handler(event: dict, context: object) -> dict:
             status = "failed"
             error_msg = repr(exc)
 
-        if repo is not None:
-            repo.update_status(
-                id=message_id,
-                status=status,
-                error_msg=error_msg,
-                outcomes_json=json.dumps(outcomes),
-            )
+        _safe_update_status(
+            repo,
+            id=message_id,
+            status=status,
+            error_msg=error_msg,
+            outcomes=outcomes,
+        )
 
     if failures:
         logger.info("batch_partial_failure count=%d total=%d", len(failures), len(records))
