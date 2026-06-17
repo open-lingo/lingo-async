@@ -57,6 +57,7 @@ from app.handlers import (
     subscription_changed,
     xp_awarded,
 )
+from app.http.internal_token import resolve_internal_service_token
 from app.http.lingo_core_client import LingoCoreClient
 
 # Configure root logger once at module load (cold start). Lambda's
@@ -82,10 +83,16 @@ def _verify_internal_token_on_boot() -> None:
 
     Never raises: a boot probe must not crash the Lambda. We only log.
     """
-    if not settings.INTERNAL_SERVICE_TOKEN:
+    # Resolve via env-wins / SSM-fallback (see app/http/internal_token.py).
+    # An empty result here means neither source produced a token — the
+    # callbacks will 401, which is exactly the case this probe exists to
+    # surface loudly at boot.
+    if not resolve_internal_service_token():
         logger.error(
-            "INTERNAL_SERVICE_TOKEN is empty — all async→core callbacks "
-            "(quests, xp) will fail with 401. Set it in this function's env."
+            "INTERNAL_SERVICE_TOKEN unresolved (env empty + SSM "
+            "unavailable) — all async→core callbacks (quests, xp) will "
+            "fail with 401. Set the env var or the SSM SecureString "
+            "/lingo/internal-service-token."
         )
         return
     try:
