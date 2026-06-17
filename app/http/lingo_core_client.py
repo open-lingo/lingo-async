@@ -35,6 +35,7 @@ import httpx
 
 from app.config import settings
 from app.http.circuit_breaker import CircuitBreaker, CircuitOpenError
+from app.http.internal_token import resolve_internal_service_token
 
 logger = logging.getLogger("lingo_async.http")
 
@@ -68,7 +69,9 @@ def _backoff_delay(attempt: int) -> float:
 class LingoCoreClient:
     def __init__(self) -> None:
         self._base = settings.LINGO_CORE_URL.rstrip("/")
-        self._headers = {"Authorization": f"Bearer {settings.INTERNAL_SERVICE_TOKEN}"}
+        # Env wins, SSM fallback (prod). Resolved at construction; clients
+        # are short-lived (one per use), so this picks up a cached token.
+        self._headers = {"Authorization": f"Bearer {resolve_internal_service_token()}"}
 
     def _request(self, label: str, send: Callable[[httpx.Client], httpx.Response]) -> dict[str, Any]:
         """Run ``send`` against a fresh client with bounded retry/backoff,
