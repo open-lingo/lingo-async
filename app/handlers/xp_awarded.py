@@ -19,6 +19,7 @@ Producer split:
 import logging
 from typing import Any
 
+from app.config import settings
 from app.contracts.messages import XpAwardedMessage
 from app.http.lingo_core_client import LingoCoreClient
 from app.leaderboard.updater import update_leaderboard
@@ -71,11 +72,16 @@ def handle(event: XpAwardedMessage) -> list[dict[str, Any]]:
                     ],
                 }
             )
-    # Leaderboard (DynamoDB direct write — separate code path from the
-    # lingo-core social repo above; still useful in prod where the
-    # Dynamo table is the source of truth for ranking queries).
-    lb_actions = update_leaderboard(event)
-    outcomes.append({"handler": "leaderboard", "actions": lb_actions})
+    # Leaderboard (DynamoDB direct write). Gated: default-off so the app can
+    # ship without leaderboards incurring write cost. Quest eval + XP crediting
+    # below/above are NOT gated — they must keep working.
+    if settings.LEADERBOARD_ENABLED:
+        lb_actions = update_leaderboard(event)
+        outcomes.append({"handler": "leaderboard", "actions": lb_actions})
+    else:
+        outcomes.append(
+            {"handler": "leaderboard", "actions": [{"skipped": "leaderboard_disabled"}]}
+        )
     q_actions = evaluate_quests_for(event.user_id, event)
     outcomes.append({"handler": "quest_eval", "actions": q_actions})
     return outcomes

@@ -50,6 +50,13 @@ class Settings(BaseSettings):
     CORE_CLIENT_BREAKER_THRESHOLD: int = 5
     CORE_CLIENT_BREAKER_COOLDOWN_S: float = 30.0
 
+    # Leaderboard fan-out write. Default OFF so the app ships without the
+    # social/leaderboard surface incurring Dynamo write cost. Set
+    # LEADERBOARD_ENABLED=true only when the social flag is enabled in the FE.
+    # NOTE: xp_awarded events keep flowing regardless — quests depend on them;
+    # this gates only the leaderboard write, never quest eval or XP crediting.
+    LEADERBOARD_ENABLED: bool = False
+
     model_config = {"env_file": str(_PROJECT_ROOT / ".env"), "env_file_encoding": "utf-8"}
 
 
