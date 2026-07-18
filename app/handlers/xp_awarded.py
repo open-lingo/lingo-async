@@ -37,6 +37,18 @@ def handle(event: XpAwardedMessage) -> list[dict[str, Any]]:
     outcomes: list[dict[str, Any]] = []
 
     if event.source not in _PRODUCER_ALREADY_CREDITED and event.amount > 0:
+        # Crediting user.xp is the PRIMARY effect for non-lesson sources — the
+        # producer skipped it, so this callback is the only place it happens.
+        # A failure here must NOT be swallowed: swallowing lets the dispatch
+        # loop ack the message "ok", SQS deletes it, and the user's XP is
+        # silently lost with no retry and no DLQ (violates the "handlers raise;
+        # the dispatch loop catches" rule). Let it propagate so the message is
+        # retried on a transient core blip and DLQ'd on a permanent one.
+        #
+        # It runs FIRST and short-circuits the rest of the fanout on failure so
+        # the leaderboard (non-idempotent ADD) and quest bumps don't fire on
+        # this attempt and then fire AGAIN on the retry that credits the XP —
+        # i.e. a failed credit costs us a retry, not a double leaderboard/quest.
         try:
             resp = LingoCoreClient().add_xp(
                 user_id=event.user_id,
@@ -44,34 +56,26 @@ def handle(event: XpAwardedMessage) -> list[dict[str, Any]]:
                 learning_language_id=event.learning_language_id,
                 leaderboard_opt_in=event.leaderboard_opt_in,
             )
-            outcomes.append(
-                {
-                    "handler": "user_xp",
-                    "actions": [
-                        {
-                            "user_id": event.user_id,
-                            "amount_added": event.amount,
-                            "new_xp": resp.get("new_xp"),
-                            "source": event.source,
-                        }
-                    ],
-                }
+        except Exception as exc:
+            logger.warning(
+                "user_xp_credit_failed user_id=%s err=%s — failing event for retry",
+                event.user_id,
+                exc,
             )
-        except Exception as exc:  # noqa: BLE001 — keep the rest of the fanout going
-            logger.warning("user_xp_credit_failed user_id=%s err=%s", event.user_id, exc)
-            outcomes.append(
-                {
-                    "handler": "user_xp",
-                    "actions": [
-                        {
-                            "user_id": event.user_id,
-                            "amount_added": 0,
-                            "error": str(exc),
-                            "source": event.source,
-                        }
-                    ],
-                }
-            )
+            raise
+        outcomes.append(
+            {
+                "handler": "user_xp",
+                "actions": [
+                    {
+                        "user_id": event.user_id,
+                        "amount_added": event.amount,
+                        "new_xp": resp.get("new_xp"),
+                        "source": event.source,
+                    }
+                ],
+            }
+        )
     # Leaderboard (DynamoDB direct write). Gated: default-off so the app can
     # ship without leaderboards incurring write cost. Quest eval + XP crediting
     # below/above are NOT gated — they must keep working.
