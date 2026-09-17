@@ -55,6 +55,14 @@ class LessonCompletedMessage(_EnvelopeV1):
     score: float = Field(ge=0.0, le=1.0)
     perfect: bool
     attempted_at: datetime
+    # NEW (additive): True when this attempt was synthesised from a
+    # placement test or per-module test-out rather than a real lesson
+    # play. Producer already skips XP/lingots for these; the quest
+    # evaluator uses this to skip lesson-count quest advancement too, so
+    # a placement run (which can fire dozens of these in one batch)
+    # can't auto-complete a daily "finish N lessons" quest. Legacy
+    # producers don't set it; default = False (treated as a real lesson).
+    is_test_out: bool = False
 
 
 class ReviewCompletedMessage(_EnvelopeV1):
